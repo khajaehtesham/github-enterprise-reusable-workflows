@@ -1,0 +1,62 @@
+name: 'Update K8s manifest file'
+description: 'Update K8s Manifest file'
+
+inputs: 
+  AWS_ECR: 
+   required: true
+   type: string
+  AWS_REGION:
+    required: true
+    type: string
+  AWS_ACCOUNT_ID: 
+   required: true
+   type: string
+  ENVIRONMENT:
+    required: true
+    type: string
+  DEVOPS_WORKFLOW_TOKEN:
+    required: true
+    type: string
+  BRANCH_TAG:
+    required: true
+    type: string
+  K8S_MANIFEST_FILE:
+    required: true
+    type: string
+  K8S_MANIFEST_REPO:
+    required: true
+    type: string
+
+permissions:
+  id-token: write
+  contents: write
+  security-events: write
+  actions: read
+
+runs: 
+  using: "composite"
+  steps:
+
+   - name: Checkout Kubernetes Manifest Repository
+     uses: actions/checkout@v4
+     with:
+       repository: ${{ inputs.K8S_MANIFEST_REPO }}
+       ref: main
+       path: deploy-manifests
+       token: ${{ inputs.DEVOPS_WORKFLOW_TOKEN }}
+
+   - name: Update Image version in yaml file
+     run: |
+       sed -i 's|${{ inputs.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.AWS_REGION }}.amazonaws.com/${{ inputs.AWS_ECR }}:.*|${{ inputs.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.AWS_REGION }}.amazonaws.com/${{ inputs.AWS_ECR }}:${{ inputs.BRANCH_TAG }}|' deploy-manifests/${{ inputs.ENVIRONMENT }}/${{ inputs.K8S_MANIFEST_FILE }}.yml 
+     shell: bash
+
+   - name: Commit and Push Changes
+     run: | 
+       cd deploy-manifests
+       git config user.name "github-actions[bot]"
+       git config user.email "github-actions[bot]@users.noreply.github.com"
+       git add ${{ inputs.ENVIRONMENT }}/${{ inputs.K8S_MANIFEST_FILE}}.yml
+       git commit -m "Update Image to ${{ inputs.BRANCH_TAG }}" || true
+       git push || true
+     shell: bash 
+   

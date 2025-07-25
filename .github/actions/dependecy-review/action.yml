@@ -1,0 +1,11 @@
+name: Dependency Review
+
+runs:
+  using: "composite"
+  steps:
+    - name: 'Dependency Review'
+      uses: actions/dependency-review-action@v4
+      with: 
+        comment-summary-in-pr: always
+        fail-on-severity: critical
+        

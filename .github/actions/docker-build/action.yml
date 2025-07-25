@@ -1,0 +1,41 @@
+name: Docker Build
+inputs:
+  IMAGENAME:
+    required: true
+    type: string
+  IMAGETAG:
+    required: true
+    type: string
+  AWS_IAM_ROLE:
+    required: true
+    type: string
+  AWS_ECR:
+    required: true
+    type: string
+  AWS_ACCOUNT_ID:
+    required: true
+    type: string
+  AWS_REGION:
+    required: true
+    type: string
+
+runs:
+  using: "composite"
+  steps:
+   
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4.0.1
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.AWS_ACCOUNT_ID }}:role/${{ inputs.AWS_IAM_ROLE }}
+        role-session-name: GitHub_to_AWS_via_FederatedOIDC
+        aws-region: ${{ inputs.AWS_REGION }}
+
+    - name: Login to ECR
+      run: |
+        echo "$(aws ecr get-login-password --region ${{ inputs.AWS_REGION }})" | docker login --username AWS --password-stdin ${{ inputs.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.AWS_REGION }}.amazonaws.com
+      shell: bash
+
+    - name: Build Docker Image
+      run: |
+        docker build -t ${{ inputs.IMAGENAME }}:${{ inputs.IMAGETAG }} -f image/Dockerfile .
+      shell: bash

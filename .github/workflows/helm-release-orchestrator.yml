@@ -1,0 +1,105 @@
+name: CD Orchestrator Deployment
+
+permissions:
+  id-token: write
+  contents: write
+  security-events: write
+  actions: read
+  pull-requests: write
+
+on:
+  workflow_call: 
+
+    inputs:
+      AWS_REGION:
+        type: string
+        required: true
+      AWS_IAM_ROLE:
+        type: string
+        required: true
+      K8S_MANIFEST_REPO:
+        type: string
+      K8S_VALUES_FILE:
+        type: string
+      HELM_CHART_REPO:
+        type: string
+      RELEASE_NAME:
+        type: string
+      IMAGE_TAG:
+        type: string
+      CONTEXT_NAME:
+        type: string
+      UPDATE_TAG:
+        type: string
+    
+    secrets:
+       AWS_ACCOUNT_ID:
+         required: true
+       DEVOPS_WORKFLOW_TOKEN:
+         required: true
+       AWS_K8S_CLUSTER:
+         required: true
+       AWS_K8S_NAME_SPACE:
+         required: false
+
+jobs:
+  
+   identify_dev_environment:
+     if: ${{ startsWith(github.ref, 'refs/heads/release') }}
+     runs-on: ubuntu-latest
+     outputs:
+       dev_env: ${{ steps.set-env.outputs.dev_env }}
+     steps:
+       - name: Set environment variable based on branch name
+         id: set-env
+         run: |
+           if [[ "${{ github.ref }}" == refs/heads/release/* ]]; then
+             git_env=dev1
+           elif [[ "${{ github.ref }}" == refs/heads/release-sq*/* ]]; then
+            git_env=dev-$(echo "${{ github.ref }}" | sed -E 's|refs/heads/release-([^/]+)/.*|\1|')
+           fi
+           echo "dev_env=$git_env" >> $GITHUB_OUTPUT
+           echo "Your DEV Environment: $git_env"
+
+    deploy_release_to_dev:
+      name: "relese to DEV"
+      needs: identify_dev_environment
+      uses: ehteshamkhaja/enterprise-reusable-workflows/.github/workflows/helm-deployment.yml@feature/cicd-publish
+      with:
+        AWS_REGION: ${{ vars.AWS_REGION }}
+        AWS_IAM_ROLE: ${{ vars.AWS_IAM_ROLE }}
+        K8S_MANIFEST_REPO: ${{ vars.K8S_MANIFEST_REPO }}
+        K8S_VALUES_FILE: ${{ vars.K8S_VALUES_FILE }}
+        HELM_CHART_REPO: ${{ vars.HELM_CHART_REPO }}
+        RELEASE_NAME: ${{ vars.RELEASE_NAME }}
+        ENVIRONMENT: ${{ needs.identify_dev_environment.outputs.dev_env }}
+        CONTEXT_NAME: ${{ vars_CONTEXT_NAME }}
+        UPDATE_TAG: ${{ vars.UPDATE_TAG }}
+        IMAGE_TAG: ${{ inputs.IMAGE_TAG }}
+      secrets:
+         AWS_ACCOUNT_ID:  ${{ secrets.AWS_ACCOUNT_ID }}
+         AWS_K8S_CLUSTER: ${{ secrets.AWS_K8S_CLUSTER }}
+         AWS_K8S_NAMESPACE: ${{ secrets.AWS_K8S_NAMESPACE }}
+         DEVOPS_WORKFLOW_TOKEN:  ${{ secrets. DEVOPS_WORKFLOW_TOKEN }}
+        
+    deploy_release_to_sit:
+      name: "relese to DEV"
+      needs: deploy_release_to_dev
+      if: ${{ github.ref != 'refs/heads/release/branchname'}}
+      uses: ehteshamkhaja/enterprise-reusable-workflows/.github/workflows/helm-deployment.yml@feature/cicd-publish
+      with:
+        AWS_REGION: ${{ vars.AWS_REGION }}
+        AWS_IAM_ROLE: ${{ vars.AWS_IAM_ROLE }}
+        K8S_MANIFEST_REPO: ${{ vars.K8S_MANIFEST_REPO }}
+        K8S_VALUES_FILE: ${{ vars.K8S_VALUES_FILE }}
+        HELM_CHART_REPO: ${{ vars.HELM_CHART_REPO }}
+        RELEASE_NAME: ${{ vars.RELEASE_NAME }}
+        ENVIRONMENT: ${{ needs.identify_dev_environment.outputs.dev_env }}
+        CONTEXT_NAME: ${{ vars_CONTEXT_NAME }}
+        UPDATE_TAG: ${{ vars.UPDATE_TAG }}
+        IMAGE_TAG: ${{ inputs.IMAGE_TAG }}
+      secrets:
+         AWS_ACCOUNT_ID:  ${{ secrets.AWS_ACCOUNT_ID }}
+         AWS_K8S_CLUSTER: ${{ secrets.AWS_K8S_CLUSTER }}
+         AWS_K8S_NAMESPACE: ${{ secrets.AWS_K8S_NAMESPACE }}
+         DEVOPS_WORKFLOW_TOKEN:  ${{ secrets. DEVOPS_WORKFLOW_TOKEN }}

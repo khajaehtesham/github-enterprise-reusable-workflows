@@ -1,0 +1,39 @@
+name: Docker Build and publish
+inputs:
+  AWS_IAM_ROLE: 
+    required: true
+    type: string
+  AWS_ECR:
+    required: true
+    type: string
+  AWS_ACCOUNT_ID:
+   required: true
+   type: string
+  AWS_REGION:
+   required: true
+   type: string
+  BRANCH_TAG:
+    required: true
+    type: string
+
+runs:
+  using: "composite"
+  steps:
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4.0.1
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.AWS_ACCOUNT_ID }}:role/${{ inputs.AWS_IAM_ROLE }}
+        role-session-name: GitHub_to_AWS_via_FederatedOIDC
+        aws-region: ${{ inputs.AWS_REGION }}
+    
+    - name: Tag Docker Image
+      run: |
+       docker tag ${{ inputs.AWS_ECR }}:${{ inputs.BRANCH_TAG }} ${{ inputs.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.AWS_REGION }}.amazonaws.com/${{ inputs.AWS_ECR }}:${{ inputs.BRANCH_TAG }}
+      shell: bash
+    
+    - name: Login and Publish Image to ECR
+      run: | 
+         echo "$(aws ecr get-login-password --region ${{ inputs.AWS_REGION }})" | docker login --username AWS --password-stdin ${{ inputs.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.AWS_REGION }}.amazonaws.com
+         docker push ${{ inputs.AWS_ACCOUNT_ID }}.dkr.ecr.${{ inputs.AWS_REGION }}.amazonaws.com/${{ inputs.AWS_ECR }}:${{ inputs.BRANCH_TAG }}
+      shell: bash

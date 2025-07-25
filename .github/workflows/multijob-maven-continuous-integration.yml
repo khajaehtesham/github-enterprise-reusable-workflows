@@ -1,0 +1,364 @@
+name: Maven Continuous Integration 
+
+permissions: 
+  id-token: write
+  contents: write
+  security-events: write
+  actions: read
+  pull-requests: write
+
+
+on: 
+ 
+  workflow_call: 
+    
+    inputs: 
+      SONAR_PROJECT_KEY:
+         required: true
+         type: string
+      AWS_REGION:
+         type: string
+       #  required: true
+      ENVIRONMENT:
+        required: true
+        type: string
+      K8S_MANIFEST_FILE:
+        type: string
+      K8s_MANIFEST_REPO:
+        type: string
+      JAVA_VERSION_APP:
+        required: true
+        type: string
+      PUBLISH_APP_ARTIFACT:
+        type: string
+      PUBLISH_IMAGE:
+        type: string
+      DEPLOY_MANIFEST:
+        type: string
+      DEPLOY_HELM:
+        type: string
+    
+    secrets:
+      DEVOPS_WORKFLOW_TOKEN:
+        required: true
+      JFROG_USERNAME:
+        required: true
+      JFROG_ARTIFACTORY_ACCESS_TOKEN:
+        required: true
+      SONAR_TOKEN:
+        required: true
+      SONAR_HOST_URL:
+        required: true
+      SONAR_ORGANIZATION_KEY:
+        required: true
+      AWS_ACCOUNT_ID:
+        required: false
+      AWS_ECR:
+        required: true
+    
+
+    outputs:
+      IMAGE_TAG:
+        description: "The image tag is published"
+        value: ${{ jobs.docker-build-publish.outputs.branch_tag }}
+  
+jobs:
+    compile:
+      name: Compile
+      runs-on: ubuntu-latest
+      steps: 
+        - name: Checkout Application Code
+          uses: actions/checkout@v4
+          with:
+            ref: ${{ github.head_ref }}
+        
+        - name: Checkout reusable code
+          uses: actions/checkout@v4
+          with: 
+            repository: ehteshamkhaja/enterprise-reusable-workflows
+            ref: feature/cicd-publish
+            path: reusable-workflows
+            token: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}
+
+        - name: Compile with Maven
+          uses: ./reusable-workflows/.github/actions/maven-compile
+          with:
+            JAVA_VERSION_APP: ${{ inputs.JAVA_VERSION_APP }}
+            JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+            JFROG_ARTIFACTORY_ACCESS_TOKEN: ${{ secrets.JFROG_ARTIFACTORY_ACCESS_TOKEN }}
+
+    test:
+      name: Unit Test
+      needs: compile
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout Application Code
+          uses: actions/checkout@v4
+          with:
+            ref: ${{ github.head_ref }}
+        
+        - name: Checkout reusable code
+          uses: actions/checkout@v4
+          with: 
+            repository: ehteshamkhaja/enterprise-reusable-workflows
+            ref: feature/cicd-publish
+            path: reusable-workflows
+            token: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}
+
+        - name: Unit Test with Maven
+          uses: ./reusable-workflows/.github/actions/maven-test
+          with:
+            JAVA_VERSION_APP: ${{ inputs.JAVA_VERSION_APP }}
+            JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+            JFROG_ARTIFACTORY_ACCESS_TOKEN: ${{ secrets.JFROG_ARTIFACTORY_ACCESS_TOKEN }}
+
+    sonar:
+      name: Code Quality Analysis
+      needs: test
+      runs-on: ubuntu-latest
+      outputs: 
+        target_env: ${{ steps.set_branch_name.outputs.branch }}
+      steps:
+       
+        - name: Checkout Application Code
+          uses: actions/checkout@v4
+        
+        - name: Checkout reusable code
+          uses: actions/checkout@v4
+          with: 
+            repository: ehteshamkhaja/enterprise-reusable-workflows
+            ref: feature/cicd-publish
+            path: reusable-workflows
+            token: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}
+        
+        - name: Determine Branch Name
+          id: set_branch_name
+          run: |
+            if [[ $GITHUB_EVENT_NAME == "pull_request" ]]; then 
+              branch_name=${GITHUB_HEAD_REF}
+            else
+               branch_name=${GITHUB_REF#refs/heads/}
+            fi
+            echo "branch=$branch_name" >> $GITHUB_OUTPUT
+            echo "Current Branch: $branch_name" 
+          shell: bash
+
+        - name: SonarCloud Analysis
+          uses: ./reusable-workflows/.github/actions/maven-sonar
+          with:
+            SONAR_PROJECT_KEY: ${{ inputs.SONAR_PROJECT_KEY }}
+            SONAR_TOKEN: ${{ inputs.SONAR_TOKEN }}
+            SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+            SONAR_ORGANIZATION_KEY: ${{ secrets.SONAR_ORGANIZATION_KEY }}
+            BRANCH_NAME: ${{ steps.set_branch_name.outputs.branch }}
+            JAVA_VERSION_SONAR: ${{ inputs.JAVA_VERSION_SONAR }}
+            JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }} 
+            JFROG_ARTIFACTORY_ACCESS_TOKEN: ${{ secrets.JFROG_ARTIFACTORY_ACCESS_TOKEN }}
+
+    code-ql: 
+      name: Secure Code Analysis
+      needs: test
+      runs-on: ubuntu-latest
+
+      steps: 
+        - name: Checkout Application Code
+          uses: actions/checkout@v4
+        
+        - name: Checkout reusable code
+          uses: actions/checkout@v4
+          with:
+            repository: ehteshamkhaja/enterprise-reusable-workflows
+            ref: feature/cicd-publish
+            path: reusable-workflows
+            token: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}
+        
+        - name: Code-QL 
+          uses: ./reusable-workflows/.github/actions/maven-code-ql
+          with:
+            JAVA_VERSION_APP: ${{ inputs.JAVA_VERSION_APP }}
+            JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+            JFROG_ARTIFACTORY_ACCESS_TOKEN: ${{ secrets.JFROG_ARTIFACTORY_ACCESS_TOKEN }}
+
+    dependency-review:
+      name: Software Composition Analysis
+      needs: test 
+      if: ${{ github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'develop' || github.event.pull_request.base.ref == 'main' || startsWith(github.event.pull_request.base.ref, 'release')) }}      
+      runs-on: ubuntu-latest
+      steps:
+        - name: Checkout Application Code
+          uses: actions/checkout@v4
+        
+        - name: Checkout reusable code
+          uses: actions/checkout@v4
+          with:
+            repository: ehteshamkhaja/enterprise-reusable-workflows
+            ref: feature/cicd-publish
+            path: reusable-workflows
+            token: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}
+        
+        - name: Dependency Review
+          uses: ./reusable-workflow/.github/actions/dependency-review
+    
+    vulnerability-scan:
+      name: Image Vulnerability Scanning
+      if: ${{ inputs.PUBLISH_IMAGE == 'true' }}
+      needs: [test]
+      runs-on: ubuntu-latest
+      environment:
+        name: ${{ inputs.ENVIRONMENT }}
+      steps:
+
+        - name: Checkout Application Code
+          uses: actions/checkout@v4
+        
+        - name: Checkout reusable code
+          uses: actions/checkout@v4
+          with:
+            repository: ehteshamkhaja/enterprise-reusable-workflows
+            ref: feature/cicd-publish
+            path: reusable-workflows
+            token: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}
+
+        - name: Build Application with Maven
+          uses: ./resuable-workflow/.github/actions/maven-build
+          with:
+            JAVA_VERSION_APP: ${{ inputs.JAVA_VERSION_APP }}
+            JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+            JFROG_ARTIFACTORY_ACCESS_TOKEN: ${{ secrets.JFROG_ARTIFACTORY_ACCESS_TOKEN }}
+
+        - name: Build Image with Docker
+          uses: ./reusable-workflows/.github/actions/docker-build
+          with:
+            IMAGENAME: app-image
+            IMAGETAG: ${{ github.sha }}
+            AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+            AWS_ECR: ${{ secrets.AWS_ECR }}
+            AWS_REGION: ${{ inputs.AWS_REGION }}
+            AWS_IAM_ROLE: ${{ inputs.AWS_IAM_ROLE }}
+
+        - name: Vulnerability Scanning with Trivy
+          uses: ./reusable-workflows/.github/actions/trivy-scan
+          with:
+            IMAGENAME: app-image
+            IMAGETAG: ${{ github.sha }}
+          env: 
+            TRIVY_CACHE_DIR: ~/.cache/trivy  # Set the trivy cache directory
+            TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db,aquasec/trivy-db,ghcr.io/aqua-security/trivy-db
+            TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db,aquasec/trivy-java-db,ghcr.io/aquasecurity/trivy-java-db
+    
+    app-build-publish: 
+      if: ${{ inputs.PUBLISH_APP_ARTIFACT == 'true' }}
+      name: Build and Publish jar to JFROG
+      needs: [sonar, cloud-ql]
+      runs-on: ubuntu-latest
+      steps: 
+
+        - name: Checkout Application Code
+          uses: actions/checkout@v4
+        
+        - name: Checkout reusable code
+          uses: actions/checkout@v4
+          with:
+            repository: ehteshamkhaja/enterprise-reusable-workflows
+            ref: feature/cicd-publish
+            path: reusable-workflows
+            token: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}
+
+        - name: Build Application with Maven
+          uses: ./resuable-workflow/.github/actions/maven-publish-local
+          with:
+            JAVA_VERSION_APP: ${{ inputs.JAVA_VERSION_APP }}
+            JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+            JFROG_ARTIFACTORY_ACCESS_TOKEN: ${{ secrets.JFROG_ARTIFACTORY_ACCESS_TOKEN }}
+    
+    docker-build-publish:
+      name: Build and Publish Image
+      needs: [ sonar, code-ql, vulnerability-scan ]
+      runs-on: ubuntu-latest
+      environment:
+        name: ${{ inputs.ENVIRONMENT }}
+      if: ${{ github.ref == 'refs/heads/develop' || startsWith(github.ref, 'refs/heads/release') || startsWith(github.ref, 'refs/heads/hotfix') && inputs.PUBLISH_IMAGE == 'true' }}
+      outputs:
+        branch_tag: ${{ steps.set_branch_tag.outputs.branch_tag }}
+      steps:
+
+        - name: Checkout Application Code
+          uses: actions/checkout@v4
+        
+        - name: Checkout reusable code
+          uses: actions/checkout@v4
+          with:
+            repository: ehteshamkhaja/enterprise-reusable-workflows
+            ref: feature/cicd-publish
+            path: reusable-workflows
+            token: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}
+
+        - name: Determine Branch Tag
+          id: set_branch_tag
+          run: | 
+            branch_name=${GITHUB_REF#refs/heads/}
+            commit_id=$(git rev-parse --short HEAD)
+            if [[ $branch_name == release*/* || $branch_name == hotfix*/* ]]; then
+               branch_tag=${branch_name//\//}
+               branch_tag="${branch_tag}-${commit_id}"
+            else
+              branch_tag=${branch_name}-${commit_id}
+            fi
+            echo "branch_tag=$branch_tag" >> GITHUB_OUTPUT
+            echo "Current branch tag: $branch_tag"
+          shell: bash
+        
+        - name: Build Application with Maven
+          uses: ./resuable-workflow/.github/actions/maven-build
+          with:
+            JAVA_VERSION_APP: ${{ inputs.JAVA_VERSION_APP }}
+            JFROG_USERNAME: ${{ secrets.JFROG_USERNAME }}
+            JFROG_ARTIFACTORY_ACCESS_TOKEN: ${{ secrets.JFROG_ARTIFACTORY_ACCESS_TOKEN }}
+
+        - name: Build Image with Docker
+          uses: ./reusable-workflows/.github/actions/docker-build
+          with:
+            IMAGENAME: app-image
+            IMAGETAG: ${{ github.sha }}
+            AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+            AWS_ECR: ${{ secrets.AWS_ECR }}
+            AWS_REGION: ${{ inputs.AWS_REGION }}
+            AWS_IAM_ROLE: ${{ inputs.AWS_IAM_ROLE }}
+        
+        - name: Publish Image to ECR
+          uses: ./reusable-workflows/.github/actions/docker-publish
+          with: 
+            AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+            AWS_ECR: ${{ secrets.AWS_ECR }}
+            AWS_REGION: ${{ inputs.AWS_REGION }}
+            AWS_IAM_ROLE: ${{ inputs.AWS_IAM_ROLE }}
+            BRANCH_TAG: ${{ steps.set_branch_tag.outputs.branch_tag }}
+    
+    Update-K8s-manifest:
+      name: Update K8s manifest
+      needs: docker-build-publish
+      runs-on: ubuntu-latest
+      if: ${{ inputs.DEPLOY_MANIFEST == 'true' }}
+      environment:
+        name: ${{ inputs.ENVIRONMENT }}
+      steps:
+
+        - name: Checkout reusable code
+          uses: actions/checkout@v4
+          with:
+            repository: ehteshamkhaja/enterprise-reusable-workflows
+            ref: feature/cicd-publish
+            path: reusable-workflows
+            token: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}
+        
+        - name: Update K8s Manifest
+          uses: ./reusable-workflows/.github/actions/K8s-manifest
+          with:
+            BRANCH_TAG: ${{ needs.docker-build-publish.outputs.branch_tag }}
+            AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+            AWS_ECR: ${{ secrets.AWS_ECR }}
+            AWS_REGION: ${{ inputs.AWS_REGION }}
+            K8S_MANIFEST_REPO: ${{ inputs.K8S_MANIFEST_REPO }}
+            K8S_MANIFEST_FILE: ${{ inputs.K8S_MANIFEST_FILE }}
+            ENVIRONMENT: ${{ inputs.ENVIRONMENT }}
+            DEVOPS_WORKFLOW_TOKEN: ${{ secrets.DEVOPS_WORKFLOW_TOKEN }}

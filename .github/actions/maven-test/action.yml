@@ -1,0 +1,46 @@
+name: Maven Compile
+
+inputs:
+  JAVA_VERSION_APP:
+    required: true
+    type: string
+  JFROG_USERNAME:
+    required: true
+    type: string
+  JFROG_ARTIFACTORY_ACCESS_TOKEN: 
+    required: true
+    type: string
+
+
+runs:
+  using: "composite"
+  steps:
+    
+    - name: Cache Maven Packages
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2
+        key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+        restore-keys: ${{ runner.os}}-m2
+    
+    - name: Setup JDK ${{ inputs.JAVA_VERSION_APP }}
+      uses: actions/setup-java@v4
+      with:
+        java-version: '${{ inputs.JAVA_VERSION_APP }}'
+        distribution: 'adopt'
+
+    - name: Generate settings.xml
+      run: |
+         mkdir -p $HOME/.m2
+         touch ~/.m2/settings.xml
+         echo '<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0" xmlns:xsi="http://wwww.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd"> <servers> <server> <id>demo-maven-dev-local</id> <username>${{ inputs.JFROG_USERNAME }}</username> <password>${{ inputs.JFROG_ARTIFACTORY_ACCESS_TOKEN }}</password> </server> <server> <id>demo-artifactory-maven-dev</id> <username>${{ inputs.JFROG_USERNAME }}</username> <password>${{ inputs.JFROG_ARTIFACTORY_ACCESS_TOKEN }}</password> </server> </servers> <mirrors> <mirror> <id>demo-artifactory-maven-dev</id> <name>demo-artifactory-maven-dev</name> <url>https://artifactory.jfrog.io/artifactory/demo-artifactory-maven-dev/</url> <mirrorOf>*</mirrorOf> </mirror> </mirrors> </settings>' > ~/.m2/settings.xml
+      shell: bash
+     
+    - name: print settings.xml
+      run: cat ~/.m2/settings.xml
+      shell: bash
+
+    
+    - name: Maven Compile
+      run: mvn test --settings ~/.m2/settings.xml
+      shell: bash
